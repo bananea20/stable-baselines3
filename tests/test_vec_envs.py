@@ -30,11 +30,13 @@ class CustomGymEnv(gym.Env):
         self.current_step = 0
         self.ep_length = 4
         self.render_mode = render_mode
+        self.current_options: Optional[Dict] = None
 
     def reset(self, *, seed: Optional[int] = None, options: Optional[Dict] = None):
         if seed is not None:
             self.seed(seed)
         self.current_step = 0
+        self.current_options = options
         self._choose_next_state()
         return self.state, {}
 
@@ -160,6 +162,25 @@ def test_vecenv_custom_calls(vec_env_class, vec_env_wrapper):
     assert getattr_result == [12] + [0 for _ in range(N_ENVS - 2)] + [12]
     assert vec_env.get_attr("current_step", indices=[-1]) == [12]
 
+    # Checks that options are correctly passed
+    assert vec_env.get_attr("current_options")[0] is None
+    # Same options for all envs
+    options = {"hello": 1}
+    vec_env.set_options(options)
+    assert vec_env.get_attr("current_options")[0] is None
+    # Only effective at reset
+    vec_env.reset()
+    assert vec_env.get_attr("current_options") == [options] * N_ENVS
+    vec_env.reset()
+    # Options are reset
+    assert vec_env.get_attr("current_options")[0] is None
+    # Use a list of options, different for the first env
+    options = [{"hello": 1}] * N_ENVS
+    options[0] = {"other_option": 2}
+    vec_env.set_options(options)
+    vec_env.reset()
+    assert vec_env.get_attr("current_options") == options
+
     vec_env.close()
 
 
@@ -172,7 +193,7 @@ class StepEnv(gym.Env):
         self.max_steps = max_steps
         self.current_step = 0
 
-    def reset(self):
+    def reset(self, *, seed: Optional[int] = None, options: Optional[Dict] = None):
         self.current_step = 0
         return np.array([self.current_step], dtype="int"), {}
 
@@ -476,12 +497,9 @@ def test_vec_env_is_wrapped():
 
 
 @pytest.mark.parametrize("vec_env_class", VEC_ENV_CLASSES)
-def test_backward_compat_seed(vec_env_class):
+def test_vec_deterministic(vec_env_class):
     def make_env():
         env = CustomGymEnv(gym.spaces.Box(low=np.zeros(2), high=np.ones(2)))
-        # Patch reset function to remove seed param
-        env.reset = lambda: (env.observation_space.sample(), {})
-        env.seed = env.observation_space.seed
         return env
 
     vec_env = vec_env_class([make_env for _ in range(N_ENVS)])
@@ -490,6 +508,22 @@ def test_backward_compat_seed(vec_env_class):
     vec_env.seed(3)
     new_obs = vec_env.reset()
     assert np.allclose(new_obs, obs)
+    # Test with VecNormalize (VecEnvWrapper should call self.venv.seed())
+    vec_normalize = VecNormalize(vec_env)
+    vec_normalize.seed(3)
+    obs = vec_env.reset()
+    vec_normalize.seed(3)
+    new_obs = vec_env.reset()
+    assert np.allclose(new_obs, obs)
+    vec_normalize.close()
+    # Similar test but with make_vec_env
+    vec_env_1 = make_vec_env("Pendulum-v1", n_envs=N_ENVS, vec_env_cls=vec_env_class, seed=0)
+    vec_env_2 = make_vec_env("Pendulum-v1", n_envs=N_ENVS, vec_env_cls=vec_env_class, seed=0)
+    assert np.allclose(vec_env_1.reset(), vec_env_2.reset())
+    random_actions = [vec_env_1.action_space.sample() for _ in range(N_ENVS)]
+    assert np.allclose(vec_env_1.step(random_actions)[0], vec_env_2.step(random_actions)[0])
+    vec_env_1.close()
+    vec_env_2.close()
 
 
 @pytest.mark.parametrize("vec_env_class", VEC_ENV_CLASSES)
@@ -580,4 +614,13 @@ def test_render(vec_env_class):
     for _ in range(10):
         vec_env.step([vec_env.action_space.sample() for _ in range(n_envs)])
         vec_env.render()
+
+    # Check that it still works with vec env wrapper
+    vec_env = VecFrameStack(vec_env, 2)
+    vec_env.render()
+    assert vec_env.render_mode == "rgb_array"
+    vec_env = VecNormalize(vec_env)
+    assert vec_env.render_mode == "rgb_array"
+    vec_env.render()
+
     vec_env.close()

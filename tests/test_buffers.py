@@ -4,6 +4,7 @@ import pytest
 import torch as th
 from gymnasium import spaces
 
+from stable_baselines3 import A2C
 from stable_baselines3.common.buffers import DictReplayBuffer, DictRolloutBuffer, ReplayBuffer, RolloutBuffer
 from stable_baselines3.common.env_checker import check_env
 from stable_baselines3.common.env_util import make_vec_env
@@ -25,7 +26,7 @@ class DummyEnv(gym.Env):
         self._t = 0
         self._ep_length = 100
 
-    def reset(self):
+    def reset(self, *, seed=None, options=None):
         self._t = 0
         obs = self._observations[0]
         return obs, {}
@@ -55,7 +56,7 @@ class DummyDictEnv(gym.Env):
         self._t = 0
         self._ep_length = 100
 
-    def reset(self):
+    def reset(self, seed=None, options=None):
         self._t = 0
         obs = {key: self._observations[0] for key in self.observation_space.spaces.keys()}
         return obs, {}
@@ -150,3 +151,16 @@ def test_device_buffer(replay_buffer_cls, device):
                 assert value[key].device.type == desired_device
         elif isinstance(value, th.Tensor):
             assert value.device.type == desired_device
+
+
+def test_custom_rollout_buffer():
+    A2C("MlpPolicy", "Pendulum-v1", rollout_buffer_class=RolloutBuffer, rollout_buffer_kwargs=dict())
+
+    with pytest.raises(TypeError, match="unexpected keyword argument 'wrong_keyword'"):
+        A2C("MlpPolicy", "Pendulum-v1", rollout_buffer_class=RolloutBuffer, rollout_buffer_kwargs=dict(wrong_keyword=1))
+
+    with pytest.raises(TypeError, match="got multiple values for keyword argument 'gamma'"):
+        A2C("MlpPolicy", "Pendulum-v1", rollout_buffer_class=RolloutBuffer, rollout_buffer_kwargs=dict(gamma=1))
+
+    with pytest.raises(AssertionError, match="DictRolloutBuffer must be used with Dict obs space only"):
+        A2C("MlpPolicy", "Pendulum-v1", rollout_buffer_class=DictRolloutBuffer)

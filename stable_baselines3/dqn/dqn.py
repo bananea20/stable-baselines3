@@ -1,5 +1,5 @@
 import warnings
-from typing import Any, Dict, List, Optional, Tuple, Type, TypeVar, Union
+from typing import Any, ClassVar, Dict, List, Optional, Tuple, Type, TypeVar, Union
 
 import numpy as np
 import torch as th
@@ -62,7 +62,7 @@ class DQN(OffPolicyAlgorithm):
     :param _init_setup_model: Whether or not to build the network at the creation of the instance
     """
 
-    policy_aliases: Dict[str, Type[BasePolicy]] = {
+    policy_aliases: ClassVar[Dict[str, Type[BasePolicy]]] = {
         "MlpPolicy": MlpPolicy,
         "CnnPolicy": CnnPolicy,
         "MultiInputPolicy": MultiInputPolicy,
@@ -151,8 +151,7 @@ class DQN(OffPolicyAlgorithm):
             self.exploration_final_eps,
             self.exploration_fraction,
         )
-        # Account for multiple environments
-        # each call to step() corresponds to n_envs transitions
+
         if self.n_envs > 1:
             if self.n_envs > self.target_update_interval:
                 warnings.warn(
@@ -161,8 +160,6 @@ class DQN(OffPolicyAlgorithm):
                     "therefore the target network will be updated after each call to env.step() "
                     f"which corresponds to {self.n_envs} steps."
                 )
-
-            self.target_update_interval = max(self.target_update_interval // self.n_envs, 1)
 
     def _create_aliases(self) -> None:
         self.q_net = self.policy.q_net
@@ -174,7 +171,9 @@ class DQN(OffPolicyAlgorithm):
         This method is called in ``collect_rollouts()`` after each step in the environment.
         """
         self._n_calls += 1
-        if self._n_calls % self.target_update_interval == 0:
+        # Account for multiple environments
+        # each call to step() corresponds to n_envs transitions
+        if self._n_calls % max(self.target_update_interval // self.n_envs, 1) == 0:
             polyak_update(self.q_net.parameters(), self.q_net_target.parameters(), self.tau)
             # Copy running stats, see GH issue #996
             polyak_update(self.batch_norm_stats, self.batch_norm_stats_target, 1.0)
@@ -246,7 +245,7 @@ class DQN(OffPolicyAlgorithm):
         if not deterministic and np.random.rand() < self.exploration_rate:
             if self.policy.is_vectorized_observation(observation):
                 if isinstance(observation, dict):
-                    n_batch = observation[list(observation.keys())[0]].shape[0]
+                    n_batch = observation[next(iter(observation.keys()))].shape[0]
                 else:
                     n_batch = observation.shape[0]
                 action = np.array([self.action_space.sample() for _ in range(n_batch)])

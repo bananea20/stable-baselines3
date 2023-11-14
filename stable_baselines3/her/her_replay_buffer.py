@@ -7,7 +7,7 @@ import torch as th
 from gymnasium import spaces
 
 from stable_baselines3.common.buffers import DictReplayBuffer
-from stable_baselines3.common.type_aliases import DictReplayBufferSamples, TensorDict
+from stable_baselines3.common.type_aliases import DictReplayBufferSamples
 from stable_baselines3.common.vec_env import VecEnv, VecNormalize
 from stable_baselines3.her.goal_selection_strategy import KEY_TO_GOAL_STRATEGY, GoalSelectionStrategy
 
@@ -45,10 +45,12 @@ class HerReplayBuffer(DictReplayBuffer):
         False by default.
     """
 
+    env: Optional[VecEnv]
+
     def __init__(
         self,
         buffer_size: int,
-        observation_space: spaces.Space,
+        observation_space: spaces.Dict,
         action_space: spaces.Space,
         env: VecEnv,
         device: Union[th.device, str] = "auto",
@@ -130,10 +132,10 @@ class HerReplayBuffer(DictReplayBuffer):
 
         self.env = env
 
-    def add(
+    def add(  # type: ignore[override]
         self,
-        obs: TensorDict,
-        next_obs: TensorDict,
+        obs: Dict[str, np.ndarray],
+        next_obs: Dict[str, np.ndarray],
         action: np.ndarray,
         reward: np.ndarray,
         done: np.ndarray,
@@ -162,18 +164,26 @@ class HerReplayBuffer(DictReplayBuffer):
         # When episode ends, compute and store the episode length
         for env_idx in range(self.n_envs):
             if done[env_idx]:
-                episode_start = self._current_ep_start[env_idx]
-                episode_end = self.pos
-                if episode_end < episode_start:
-                    # Occurs when the buffer becomes full, the storage resumes at the
-                    # beginning of the buffer. This can happen in the middle of an episode.
-                    episode_end += self.buffer_size
-                episode_indices = np.arange(episode_start, episode_end) % self.buffer_size
-                self.ep_length[episode_indices, env_idx] = episode_end - episode_start
-                # Update the current episode start
-                self._current_ep_start[env_idx] = self.pos
+                self._compute_episode_length(env_idx)
 
-    def sample(self, batch_size: int, env: Optional[VecNormalize] = None) -> DictReplayBufferSamples:
+    def _compute_episode_length(self, env_idx: int) -> None:
+        """
+        Compute and store the episode length for environment with index env_idx
+
+        :param env_idx: index of the environment for which the episode length should be computed
+        """
+        episode_start = self._current_ep_start[env_idx]
+        episode_end = self.pos
+        if episode_end < episode_start:
+            # Occurs when the buffer becomes full, the storage resumes at the
+            # beginning of the buffer. This can happen in the middle of an episode.
+            episode_end += self.buffer_size
+        episode_indices = np.arange(episode_start, episode_end) % self.buffer_size
+        self.ep_length[episode_indices, env_idx] = episode_end - episode_start
+        # Update the current episode start
+        self._current_ep_start[env_idx] = self.pos
+
+    def sample(self, batch_size: int, env: Optional[VecNormalize] = None) -> DictReplayBufferSamples:  # type: ignore[override]
         """
         Sample elements from the replay buffer.
 
@@ -256,6 +266,8 @@ class HerReplayBuffer(DictReplayBuffer):
             {key: obs[batch_indices, env_indices, :] for key, obs in self.next_observations.items()}, env
         )
 
+        assert isinstance(obs_, dict)
+        assert isinstance(next_obs_, dict)
         # Convert to torch tensor
         observations = {key: self.to_torch(obs) for key, obs in obs_.items()}
         next_observations = {key: self.to_torch(obs) for key, obs in next_obs_.items()}
@@ -301,11 +313,12 @@ class HerReplayBuffer(DictReplayBuffer):
         # The desired goal for the next observation must be the same as the previous one
         next_obs["desired_goal"] = new_goals
 
+        assert (
+            self.env is not None
+        ), "You must initialize HerReplayBuffer with a VecEnv so it can compute rewards for virtual transitions"
         # Compute new reward
         rewards = self.env.env_method(
             "compute_reward",
-            # here we use the new desired goal
-            obs["desired_goal"],
             # the new state depends on the previous state and action
             # s_{t+1} = f(s_t, a_t)
             # so the next achieved_goal depends also on the previous state and action
@@ -313,13 +326,15 @@ class HerReplayBuffer(DictReplayBuffer):
             # r_t = reward(s_t, a_t) = reward(next_achieved_goal, desired_goal)
             # therefore we have to use next_obs["achieved_goal"] and not obs["achieved_goal"]
             next_obs["achieved_goal"],
+            # here we use the new desired goal
+            obs["desired_goal"],
             infos,
             # we use the method of the first environment assuming that all environments are identical.
             indices=[0],
         )
         rewards = rewards[0].astype(np.float32)  # env_method returns a list containing one element
-        obs = self._normalize_obs(obs, env)
-        next_obs = self._normalize_obs(next_obs, env)
+        obs = self._normalize_obs(obs, env)  # type: ignore[assignment]
+        next_obs = self._normalize_obs(next_obs, env)  # type: ignore[assignment]
 
         # Convert to torch tensor
         observations = {key: self.to_torch(obs) for key, obs in obs.items()}
@@ -334,7 +349,7 @@ class HerReplayBuffer(DictReplayBuffer):
             dones=self.to_torch(
                 self.dones[batch_indices, env_indices] * (1 - self.timeouts[batch_indices, env_indices])
             ).reshape(-1, 1),
-            rewards=self.to_torch(self._normalize_reward(rewards.reshape(-1, 1), env)),
+            rewards=self.to_torch(self._normalize_reward(rewards.reshape(-1, 1), env)),  # type: ignore[attr-defined]
         )
 
     def _sample_goals(self, batch_indices: np.ndarray, env_indices: np.ndarray) -> np.ndarray:
@@ -375,12 +390,19 @@ class HerReplayBuffer(DictReplayBuffer):
         If not called, we assume that we continue the same trajectory (same episode).
         """
         # If we are at the start of an episode, no need to truncate
-        if (self.ep_start[self.pos] != self.pos).any():
+        if (self._current_ep_start != self.pos).any():
             warnings.warn(
                 "The last trajectory in the replay buffer will be truncated.\n"
                 "If you are in the same episode as when the replay buffer was saved,\n"
                 "you should use `truncate_last_trajectory=False` to avoid that issue."
             )
-            self.ep_start[-1] = self.pos
-            # set done = True for current episodes
-            self.dones[self.pos - 1] = True
+            # only consider epsiodes that are not finished
+            for env_idx in np.where(self._current_ep_start != self.pos)[0]:
+                # set done = True for last episodes
+                self.dones[self.pos - 1, env_idx] = True
+                # make sure that last episodes can be sampled and
+                # update next episode start (self._current_ep_start)
+                self._compute_episode_length(env_idx)
+                # handle infinite horizon tasks
+                if self.handle_timeout_termination:
+                    self.timeouts[self.pos - 1, env_idx] = True  # not an actual timeout, but it allows bootstrapping

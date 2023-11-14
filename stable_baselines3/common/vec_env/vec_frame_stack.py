@@ -31,13 +31,13 @@ class VecFrameStack(VecEnvWrapper):
         self,
     ) -> Tuple[Union[np.ndarray, Dict[str, np.ndarray]], np.ndarray, np.ndarray, List[Dict[str, Any]],]:
         observations, rewards, dones, infos = self.venv.step_wait()
-        observations, infos = self.stacked_obs.update(observations, dones, infos)
+        observations, infos = self.stacked_obs.update(observations, dones, infos)  # type: ignore[arg-type]
         return observations, rewards, dones, infos
 
     def reset(self) -> Union[np.ndarray, Dict[str, np.ndarray]]:
         """
         Reset all environments
         """
-        observation = self.venv.reset()  # pytype:disable=annotation-type-mismatch
-        observation = self.stacked_obs.reset(observation)
+        observation = self.venv.reset()
+        observation = self.stacked_obs.reset(observation)  # type: ignore[arg-type]
         return observation

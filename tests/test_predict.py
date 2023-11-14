@@ -30,7 +30,7 @@ class CustomSubClassedSpaceEnv(gym.Env):
         self.observation_space = SubClassedBox(-1, 1, shape=(2,), dtype=np.float32)
         self.action_space = SubClassedBox(-1, 1, shape=(2,), dtype=np.float32)
 
-    def reset(self):
+    def reset(self, seed=None):
         return self.observation_space.sample(), {}
 
     def step(self, action):
@@ -116,3 +116,12 @@ def test_subclassed_space_env(model_class):
     model.learn(300)
     obs, _ = env.reset()
     env.step(model.predict(obs))
+
+
+def test_mixing_gym_vecenv_api():
+    env = gym.make("CartPole-v1")
+    model = PPO("MlpPolicy", env)
+    # Reset return a tuple (obs, info)
+    wrong_obs = env.reset()
+    with pytest.raises(ValueError, match="mixing Gym API"):
+        model.predict(wrong_obs)

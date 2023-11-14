@@ -5,7 +5,7 @@ Examples
 
 .. note::
 
-        These examples are only to demonstrate the use of the library and its functions, and the trained agents may not solve the environments. Optimized               hyperparameters can be found in the RL Zoo `repository <https://github.com/DLR-RM/rl-baselines3-zoo>`_.
+  These examples are only to demonstrate the use of the library and its functions, and the trained agents may not solve the environments. Optimized hyperparameters can be found in the RL Zoo `repository <https://github.com/DLR-RM/rl-baselines3-zoo>`_.
 
 
 Try it online with Colab Notebooks!
@@ -71,7 +71,7 @@ In the following example, we will train, save and load a DQN model on the Lunar 
 
 
   # Create environment
-  env = gym.make("LunarLander-v2")
+  env = gym.make("LunarLander-v2", render_mode="rgb_array")
 
   # Instantiate the agent
   model = DQN("MlpPolicy", env, verbose=1)
@@ -99,7 +99,7 @@ In the following example, we will train, save and load a DQN model on the Lunar 
   for i in range(1000):
       action, _states = model.predict(obs, deterministic=True)
       obs, rewards, dones, info = vec_env.step(action)
-      vec_env.render()
+      vec_env.render("human")
 
 
 Multiprocessing: Unleashing the Power of Vectorized Environments
@@ -116,7 +116,6 @@ Multiprocessing: Unleashing the Power of Vectorized Environments
 .. code-block:: python
 
   import gymnasium as gym
-  import numpy as np
 
   from stable_baselines3 import PPO
   from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv
@@ -192,8 +191,8 @@ Dict Observations
 
 You can use environments with dictionary observation spaces. This is useful in the case where one can't directly
 concatenate observations such as an image from a camera combined with a vector of servo sensor data (e.g., rotation angles).
-Stable Baselines3 provides ``SimpleMultiObsEnv`` as an example of this kind of of setting.
-The environment is a simple grid world but the observations for each cell come in the form of dictionaries.
+Stable Baselines3 provides ``SimpleMultiObsEnv`` as an example of this kind of setting.
+The environment is a simple grid world, but the observations for each cell come in the form of dictionaries.
 These dictionaries are randomly initialized on the creation of the environment and contain a vector observation and an image observation.
 
 .. code-block:: python
@@ -209,8 +208,8 @@ These dictionaries are randomly initialized on the creation of the environment a
   model.learn(total_timesteps=100_000)
 
 
-Using Callback: Monitoring Training
------------------------------------
+Callbacks: Monitoring Training
+------------------------------
 
 .. note::
 
@@ -218,7 +217,7 @@ Using Callback: Monitoring Training
 
 You can define a custom callback function that will be called inside the agent.
 This could be useful when you want to monitor training, for instance display live
-learning curves in Tensorboard (or in Visdom) or save the best agent.
+learning curves in Tensorboard or save the best agent.
 If your callback returns False, training is aborted early.
 
 .. image:: ../_static/img/colab-badge.svg
@@ -252,7 +251,7 @@ If your callback returns False, training is aborted early.
       :param verbose: Verbosity level: 0 for no output, 1 for info messages, 2 for debug messages
       """
       def __init__(self, check_freq: int, log_dir: str, verbose: int = 1):
-          super(SaveOnBestTrainingRewardCallback, self).__init__(verbose)
+          super().__init__(verbose)
           self.check_freq = check_freq
           self.log_dir = log_dir
           self.save_path = os.path.join(log_dir, "best_model")
@@ -306,6 +305,49 @@ If your callback returns False, training is aborted early.
 
   plot_results([log_dir], timesteps, results_plotter.X_TIMESTEPS, "TD3 LunarLander")
   plt.show()
+
+
+Callbacks: Evaluate Agent Performance
+-------------------------------------
+To periodically evaluate an agent's performance on a separate test environment, use ``EvalCallback``.
+You can control the evaluation frequency with ``eval_freq`` to monitor your agent's progress during training.
+
+.. code-block:: python
+
+  import os
+  import gymnasium as gym
+
+  from stable_baselines3 import SAC
+  from stable_baselines3.common.callbacks import EvalCallback
+  from stable_baselines3.common.env_util import make_vec_env
+
+  env_id = "Pendulum-v1"
+  n_training_envs = 1
+  n_eval_envs = 5
+
+  # Create log dir where evaluation results will be saved
+  eval_log_dir = "./eval_logs/"
+  os.makedirs(eval_log_dir, exist_ok=True)
+
+  # Initialize a vectorized training environment with default parameters
+  train_env = make_vec_env(env_id, n_envs=n_training_envs, seed=0)
+
+  # Separate evaluation env, with different parameters passed via env_kwargs
+  # Eval environments can be vectorized to speed up evaluation.
+  eval_env = make_vec_env(env_id, n_envs=n_eval_envs, seed=0,
+                          env_kwargs={'g':0.7})
+
+  # Create callback that evaluates agent for 5 episodes every 500 training environment steps.
+  # When using multiple training environments, agent will be evaluated every
+  # eval_freq calls to train_env.step(), thus it will be evaluated every
+  # (eval_freq * n_envs) training steps. See EvalCallback doc for more information.
+  eval_callback = EvalCallback(eval_env, best_model_save_path=eval_log_dir,
+                                log_path=eval_log_dir, eval_freq=max(500 // n_training_envs, 1),
+                                n_eval_episodes=5, deterministic=True,
+                                render=False)
+
+  model = SAC("MlpPolicy", train_env)
+  model.learn(5000, callback=eval_callback)
 
 
 Atari Games
@@ -380,7 +422,7 @@ will compute a running average and standard deviation of input features (it can 
 
   # Note: pybullet is not compatible yet with Gymnasium
   # you might need to use `import rl_zoo3.gym_patches`
-  # and use gym (not Gymnasium) to instanciate the env
+  # and use gym (not Gymnasium) to instantiate the env
   # Alternatively, you can use the MuJoCo equivalent "HalfCheetah-v4"
   vec_env = DummyVecEnv([lambda: gym.make("HalfCheetahBulletEnv-v0")])
   # Automatically normalize the input features and reward
@@ -469,6 +511,7 @@ The parking env is a goal-conditioned continuous control task, in which the vehi
   # Load saved model
   # Because it needs access to `env.compute_reward()`
   # HER must be loaded with the env
+  env = gym.make("parking-v0", render_mode="human") # Change the render mode
   model = SAC.load("her_sac_highway", env=env)
 
   obs, info = env.reset()
@@ -478,7 +521,6 @@ The parking env is a goal-conditioned continuous control task, in which the vehi
   for _ in range(100):
       action, _ = model.predict(obs, deterministic=True)
       obs, reward, terminated, truncated, info = env.step(action)
-      env.render()
       episode_reward += reward
       if terminated or truncated or info.get("is_success", False):
           print("Reward:", episode_reward, "Success?", info.get("is_success", False))
